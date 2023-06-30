@@ -1,6 +1,9 @@
 package vm
 
 import (
+	"bytes"
+	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -88,7 +91,7 @@ func (vm *VM) execute(instr word) {
 
 		switch trap := instr & 0xFF; trap {
 		case TrapGetc: // get character from keyboard, not echoed onto the terminal
-			for len(vm.keysBuffer) == 0 {
+			for len(vm.keysBuffer) == 0 && vm.running {
 				time.Sleep(time.Millisecond)
 			}
 
@@ -128,12 +131,40 @@ func (vm *VM) popInstr() word {
 	return w
 }
 
+var hackTopBottomLine = 0
+
+func dec(s string) string {
+	return fmt.Sprintf("\x1b(0%s\x1b(B", s)
+}
+
+func hackDrawingBox(p []byte) []byte {
+	if bytes.Contains(p, []byte{'|'}) {
+		return []byte(strings.ReplaceAll(string(p), "|", "\x1b(0x\x1b(B"))
+	} else if bytes.Contains(p, []byte{'+'}) {
+		s := strings.ReplaceAll(string(p), "-", dec("q"))
+		if hackTopBottomLine%2 == 0 {
+			s = strings.Replace(s, "+", dec("l"), 1)
+			s = strings.Replace(s, "+", dec("k"), 1)
+		} else {
+			s = strings.Replace(s, "+", dec("m"), 1)
+			s = strings.Replace(s, "+", dec("j"), 1)
+		}
+		hackTopBottomLine++
+
+		return []byte(s)
+	} else {
+		return p
+	}
+}
+
 func (vm *VM) puts(fn func(word) []byte) {
 	address, buf := vm.R(0), []byte{}
 	for ok, c, i := true, word(0), word(0); ok; ok, i = (c != 0), i+1 {
 		c = vm.MemRead(address + i)
 		buf = append(buf, fn(c)...)
 	}
+
+	buf = hackDrawingBox(buf)
 
 	if _, vm.err = vm.Write(buf); vm.err != nil {
 		vm.Stop()
